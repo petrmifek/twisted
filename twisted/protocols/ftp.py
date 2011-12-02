@@ -4,6 +4,11 @@
 
 """
 An FTP protocol implementation
+
+local changes:
+* open files in binary mode to prevent strange conversions happening when running on Windows...
+* use localtime instead of gmtime because Windows world expects that...
+* use module level DEBUG trigger to filter out some logging as a short-stop measure for my local needs
 """
 
 # System Imports
@@ -32,6 +37,9 @@ from twisted.python import log, failure, filepath
 from twisted.python.compat import reduce
 
 from twisted.cred import error as cred_error, portal, credentials, checkers
+
+
+DEBUG = False
 
 # constants
 # response codes
@@ -390,7 +398,7 @@ class DTP(object, protocol.Protocol):
             return ''.join([mode & (256 >> n) and 'rwx'[n % 3] or '-' for n in range(9)])
 
         def formatDate(mtime):
-            now = time.gmtime()
+            now = time.localtime()
             info = {
                 'month': _months[mtime.tm_mon],
                 'day': mtime.tm_mday,
@@ -414,7 +422,7 @@ class DTP(object, protocol.Protocol):
             'owner': owner[:8],
             'group': group[:8],
             'size': size,
-            'date': formatDate(time.gmtime(modified)),
+            'date': formatDate(time.localtime(modified)),
             'name': name}
 
     def sendListResponse(self, name, response):
@@ -519,7 +527,8 @@ class DTPFactory(protocol.ClientFactory):
 
 
     def buildProtocol(self, addr):
-        log.msg('DTPFactory.buildProtocol', debug=True)
+        if DEBUG:
+            log.msg('DTPFactory.buildProtocol', debug=True)
 
         if self._state is not self._IN_PROGRESS:
             return None
@@ -534,7 +543,8 @@ class DTPFactory(protocol.ClientFactory):
 
 
     def stopFactory(self):
-        log.msg('dtpFactory.stopFactory', debug=True)
+        if DEBUG:
+            log.msg('dtpFactory.stopFactory', debug=True)
         self.cancelTimeout()
 
 
@@ -552,12 +562,14 @@ class DTPFactory(protocol.ClientFactory):
 
     def cancelTimeout(self):
         if self.delayedCall is not None and self.delayedCall.active():
-            log.msg('cancelling DTP timeout', debug=True)
+            if DEBUG:
+                log.msg('cancelling DTP timeout', debug=True)
             self.delayedCall.cancel()
 
 
     def setTimeout(self, seconds):
-        log.msg('DTPFactory.setTimeout set to %s seconds' % seconds)
+        if DEBUG:
+            log.msg('DTPFactory.setTimeout set to %s seconds' % seconds)
         self.delayedCall = self._reactor.callLater(seconds, self.timeoutFactory)
 
 
@@ -1171,7 +1183,7 @@ class FTP(object, basic.LineReceiver, policies.TimeoutMixin):
             return defer.fail(FileNotFoundError(path))
 
         def cbStat((modified,)):
-            return (FILE_STATUS, time.strftime('%Y%m%d%H%M%S', time.gmtime(modified)))
+            return (FILE_STATUS, time.strftime('%Y%m%d%H%M%S', time.localtime(modified)))
 
         return self.shell.stat(newsegs, ('modified',)).addCallback(cbStat)
 
@@ -1278,9 +1290,9 @@ class FTP(object, basic.LineReceiver, policies.TimeoutMixin):
     def cleanupDTP(self):
         """call when DTP connection exits
         """
-        log.msg('cleanupDTP', debug=True)
-
-        log.msg(self.dtpPort)
+        if DEBUG:
+            log.msg('cleanupDTP', debug=True)
+            log.msg(self.dtpPort)
         dtpPort, self.dtpPort = self.dtpPort, None
         if interfaces.IListeningPort.providedBy(dtpPort):
             dtpPort.stopListening()
@@ -1645,7 +1657,7 @@ class FTPAnonymousShell(object):
             # returns EACCES in this case, so we check before
             return defer.fail(IsADirectoryError(path))
         try:
-            f = p.open('r')
+            f = p.open('rb')
         except (IOError, OSError), e:
             return errnoToFailure(e.errno, path)
         except:
@@ -1874,7 +1886,7 @@ class FTPShell(FTPAnonymousShell):
             # returns EACCES in this case, so we check before
             return defer.fail(IsADirectoryError(path))
         try:
-            fObj = p.open('w')
+            fObj = p.open('wb')
         except (IOError, OSError), e:
             return errnoToFailure(e.errno, path)
         except:
