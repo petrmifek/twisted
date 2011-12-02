@@ -2159,6 +2159,7 @@ class FTPClientBasic(basic.LineReceiver):
     Foundations of an FTP client.
     """
     debug = False
+    noFTPServerResponseTimeout = 120
 
     def __init__(self):
         self.actionQueue = []
@@ -2167,6 +2168,7 @@ class FTPClientBasic(basic.LineReceiver):
         self.nextDeferred.addErrback(self.fail)
         self.response = []
         self._failed = 0
+        self._dumbCommandTimeout = None
 
     def fail(self, error):
         """
@@ -2202,6 +2204,25 @@ class FTPClientBasic(basic.LineReceiver):
             return
         basic.LineReceiver.sendLine(self, line)
 
+    def connectionMade(self):
+        basic.LineReceiver.connectionMade(self)
+        # first command will clear this for us
+        self._scheduleDumbTimeoutWithCancellingDeferred(None)
+
+    def _scheduleDumbTimeoutWithCancellingDeferred(self, cancellingDeferred):
+        if self._dumbCommandTimeout and self._dumbCommandTimeout.active():
+            self._dumbCommandTimeout.cancel()
+            self._dumbCommandTimeout = None
+        def cancelTimeout(unused=""):
+            self._dumbCommandTimeout.cancel()
+            self._dumbCommandTimeout = None
+        def doTimeout(unused=""):
+            log.msg(self, "FTP forcing timeout")
+            self.fail(error.TimeoutError(string="Timeout waiting for FTP server response for command"))
+        self._dumbCommandTimeout = reactor.callLater(self.noFTPServerResponseTimeout, doTimeout)
+        if cancellingDeferred:
+            cancellingDeferred.addBoth(cancelTimeout)
+
     def sendNextCommand(self):
         """
         (Private) Processes the next command in the queue.
@@ -2224,6 +2245,9 @@ class FTPClientBasic(basic.LineReceiver):
         if self.debug:
             log.msg('<-- %s' % ftpCommand.text)
         self.nextDeferred = ftpCommand.deferred
+
+        self._scheduleDumbTimeoutWithCancellingDeferred(self.nextDeferred)
+
         self.sendLine(ftpCommand.text)
 
     def queueCommand(self, ftpCommand):
@@ -2236,6 +2260,10 @@ class FTPClientBasic(basic.LineReceiver):
 
         @param ftpCommand: an L{FTPCommand}
         """
+        if self._failed:
+            ftpCommand.fail(failure.Failure(error.UserError(string="FTP Client already failed, can't queue ftpCommand.")))
+            return
+
         self.actionQueue.append(ftpCommand)
         if (len(self.actionQueue) == 1 and self.transport is not None and
             self.nextDeferred is None):
@@ -2299,6 +2327,11 @@ class FTPClientBasic(basic.LineReceiver):
             deferred.addErrback(self.fail)
             # But also swallow the error, so we don't cause spurious errors
             deferred.addErrback(lambda x: None)
+
+        if self._failed:
+            self._failed = 0
+            self.fail(error.UserError(string="FTP Client already failed, can't queue login."))
+
 
     def lineReceived(self, line):
         """
