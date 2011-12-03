@@ -2213,9 +2213,10 @@ class FTPClientBasic(basic.LineReceiver):
         if self._dumbCommandTimeout and self._dumbCommandTimeout.active():
             self._dumbCommandTimeout.cancel()
             self._dumbCommandTimeout = None
-        def cancelTimeout(unused=""):
+        def cancelTimeout(unused="", unused2=""):
             self._dumbCommandTimeout.cancel()
             self._dumbCommandTimeout = None
+            return unused
         def doTimeout(unused=""):
             log.msg(self, "FTP forcing timeout")
             self.fail(error.TimeoutError(string="Timeout waiting for FTP server response for command"))
